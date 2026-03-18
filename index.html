@@ -5,7 +5,483 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FEMA Disaster Data Explorer</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+/* ─────────────────────────────────────────────────────────────────────────
+   Minimal Chart Engine — drop-in replacement for Chart.js
+   Supports: bar (vertical + horizontal), line, doughnut
+   Same API:  new Chart(el, config)  /  makeChart(id, config)
+   ───────────────────────────────────────────────────────────────────────── */
+(function(global) {
+'use strict';
+
+const DPR = window.devicePixelRatio || 1;
+
+/* ── colour helpers ────────────────────────────────────────────────────── */
+function hexA(hex, a) {
+  // parse #RRGGBBAA or #RRGGBB and set alpha
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+function toRgba(col, fallbackA) {
+  if (!col) return `rgba(128,128,128,${fallbackA})`;
+  if (col.startsWith('rgba')) return col;
+  if (col.startsWith('rgb(')) return col.replace('rgb(','rgba(').replace(')',`,${fallbackA})`);
+  if (col.startsWith('#') && col.length >= 7) {
+    const aa = col.length === 9 ? parseInt(col.slice(7,9),16)/255 : fallbackA;
+    return hexA(col.slice(0,7), aa);
+  }
+  return col;
+}
+
+/* ── layout constants ──────────────────────────────────────────────────── */
+const PAD   = { top: 28, right: 16, bottom: 48, left: 52 };
+const PAD_H = { top: 12, right: 52, bottom: 36, left: 140 }; // horizontal bar
+const TICK_COLOR  = '#8fa3b8';
+const GRID_COLOR  = 'rgba(36,53,72,0.8)';
+const FONT        = "10px 'IBM Plex Mono', monospace";
+const FONT_LEGEND = "10px 'IBM Plex Mono', monospace";
+
+/* ── format helpers ────────────────────────────────────────────────────── */
+function fmtNum(v) {
+  if (v === null || v === undefined || isNaN(v)) return '';
+  if (Math.abs(v) >= 1e6)  return (v/1e6).toFixed(1)+'M';
+  if (Math.abs(v) >= 1e3)  return (v/1e3).toFixed(v>=10000?0:1)+'k';
+  if (!Number.isInteger(v) && Math.abs(v) < 100) return v.toFixed(1);
+  return Math.round(v).toLocaleString();
+}
+function fmtAxis(v, cfg) {
+  if (cfg && cfg.ticks && cfg.ticks.callback) return cfg.ticks.callback(v);
+  return fmtNum(v);
+}
+
+/* ── nice axis scale ───────────────────────────────────────────────────── */
+function niceScale(max, ticks=5) {
+  if (!max || max <= 0) return { min:0, max:10, step:2 };
+  const raw = max / ticks;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const nice = [1,2,2.5,5,10].map(f => f*mag).find(f => f >= raw) || mag*10;
+  const top  = Math.ceil(max / nice) * nice;
+  return { min: 0, max: top, step: nice };
+}
+
+/* ── canvas setup ──────────────────────────────────────────────────────── */
+function setupCanvas(canvas, w, h) {
+  canvas.width  = w * DPR;
+  canvas.height = h * DPR;
+  canvas.style.width  = w + 'px';
+  canvas.style.height = h + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(DPR, DPR);
+  return ctx;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   BAR CHART (vertical and horizontal)
+═══════════════════════════════════════════════════════════════════════ */
+function drawBar(canvas, cfg) {
+  const horiz  = (cfg.options?.indexAxis === 'y');
+  const labels = cfg.data.labels || [];
+  const dsets  = cfg.data.datasets || [];
+  const W = canvas.offsetWidth || 460;
+  const H = canvas.offsetHeight || 240;
+  const ctx = setupCanvas(canvas, W, H);
+
+  const pad    = horiz ? { ...PAD_H } : { ...PAD };
+  // Extend left pad for long labels
+  if (!horiz) {
+    const longestLabel = labels.reduce((a,b)=>String(b).length>a?String(b).length:a, 0);
+    pad.bottom = Math.max(36, Math.min(90, longestLabel * 5.5));
+  } else {
+    const longestLabel = labels.reduce((a,b)=>String(b).length>a?String(b).length:a, 0);
+    pad.left = Math.max(90, Math.min(180, longestLabel * 6.5));
+  }
+
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top  - pad.bottom;
+
+  // Determine if dual-axis
+  const hasY2 = dsets.some(d => d.yAxisID === 'y2');
+
+  // Collect values per axis
+  const vals1 = dsets.filter(d => !d.yAxisID || d.yAxisID === 'y').flatMap(d => d.data || []).filter(v=>v!=null);
+  const vals2 = dsets.filter(d => d.yAxisID === 'y2').flatMap(d => d.data || []).filter(v=>v!=null);
+
+  const sc1   = niceScale(Math.max(...vals1, 0));
+  const sc2   = hasY2 ? niceScale(Math.max(...vals2, 0)) : sc1;
+
+  const scaleForDs = d => (!d.yAxisID || d.yAxisID==='y') ? sc1 : sc2;
+
+  // Only bar datasets for grouping
+  const barDsets = dsets.filter(d => d.type !== 'line');
+  const lineDsets= dsets.filter(d => d.type === 'line');
+  const nBars    = barDsets.length;
+  const groupW   = horiz ? plotH / labels.length : plotW / labels.length;
+  const barGap   = groupW * 0.15;
+  const barW     = nBars > 0 ? (groupW - barGap * 2) / nBars : groupW - barGap*2;
+
+  function toY(v, sc) { return pad.top + plotH - (v - sc.min)/(sc.max - sc.min) * plotH; }
+  function toX(v, sc) { return pad.left + (v - sc.min)/(sc.max - sc.min) * plotW; }
+  function groupX(i)  { return pad.left + i * groupW + barGap; }
+  function groupY(i)  { return pad.top  + i * groupW + barGap; }
+
+  ctx.clearRect(0, 0, W, H);
+
+  /* grid lines */
+  ctx.font = FONT; ctx.textBaseline = 'middle';
+  const scForGrid = sc1;
+  let t = scForGrid.min;
+  while (t <= scForGrid.max + scForGrid.step * 0.01) {
+    const showGrid = (cfg.options?.scales?.y?.grid?.display !== false && !horiz) ||
+                     (cfg.options?.scales?.x?.grid?.display !== false && horiz);
+    if (showGrid) {
+      if (!horiz) {
+        const y = toY(t, scForGrid);
+        ctx.strokeStyle = GRID_COLOR; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left+plotW, y); ctx.stroke();
+        ctx.fillStyle = TICK_COLOR; ctx.textAlign = 'right';
+        ctx.fillText(fmtAxis(t, cfg.options?.scales?.y), pad.left - 5, y);
+      } else {
+        const x = toX(t, scForGrid);
+        ctx.strokeStyle = GRID_COLOR; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top+plotH); ctx.stroke();
+        ctx.fillStyle = TICK_COLOR; ctx.textAlign = 'center';
+        ctx.fillText(fmtAxis(t, cfg.options?.scales?.x), x, pad.top+plotH+14);
+      }
+    }
+    t = Math.round((t + scForGrid.step) * 1e9) / 1e9;
+    if (t > scForGrid.max * 1.01) break;
+  }
+
+  /* right axis (y2) */
+  if (hasY2) {
+    t = sc2.min;
+    while (t <= sc2.max + sc2.step * 0.01) {
+      const y = toY(t, sc2);
+      ctx.fillStyle = '#f0b429'; ctx.textAlign = 'left'; ctx.font = FONT;
+      ctx.fillText(fmtNum(t), pad.left+plotW+5, y);
+      t = Math.round((t + sc2.step) * 1e9) / 1e9;
+      if (t > sc2.max * 1.01) break;
+    }
+  }
+
+  /* bars */
+  barDsets.forEach((ds, di) => {
+    const sc = scaleForDs(ds);
+    const cols = Array.isArray(ds.backgroundColor) ? ds.backgroundColor : Array(labels.length).fill(ds.backgroundColor || '#2389d7');
+    const baseY = toY(sc.min, sc);
+    const baseX = toX(sc.min, sc);
+    const r = ds.borderRadius || 0;
+
+    (ds.data || []).forEach((v, i) => {
+      if (v == null) return;
+      const col = toRgba(cols[i] || cols[0], 0.85);
+      ctx.fillStyle = col;
+      if (!horiz) {
+        const x = groupX(i) + di * barW;
+        const y = toY(v, sc);
+        const bh = baseY - y;
+        if (bh <= 0) return;
+        roundRect(ctx, x, y, barW - 1, bh, Math.min(r, bh/2, barW/2));
+        ctx.fill();
+      } else {
+        const y2 = groupY(i) + di * barW;
+        const bw = toX(v, sc) - baseX;
+        if (bw <= 0) return;
+        roundRect(ctx, baseX, y2, bw, barW - 1, Math.min(r, bw/2, barW/2));
+        ctx.fill();
+      }
+    });
+  });
+
+  /* line overlay */
+  lineDsets.forEach(ds => {
+    const sc = scaleForDs(ds);
+    const pts = (ds.data || []).map((v,i) => ({
+      x: !horiz ? groupX(i) + (nBars > 0 ? (nBars*barW)/2 : groupW/2) : toX(v||0, sc),
+      y: !horiz ? toY(v||0, sc) : groupY(i) + groupW/2
+    }));
+    const valid = pts.filter((_,i) => ds.data[i] != null);
+    if (valid.length < 2) return;
+    ctx.strokeStyle = ds.borderColor || '#f0b429';
+    ctx.lineWidth   = ds.borderWidth || 2;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    valid.forEach((p, i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
+    ctx.stroke();
+    const pr = ds.pointRadius || 3;
+    if (pr > 0) {
+      ctx.fillStyle = ds.pointBackgroundColor || ds.borderColor || '#f0b429';
+      valid.forEach(p => { ctx.beginPath(); ctx.arc(p.x,p.y,pr,0,Math.PI*2); ctx.fill(); });
+    }
+  });
+
+  /* x-axis labels */
+  ctx.font = FONT; ctx.fillStyle = TICK_COLOR;
+  labels.forEach((lbl, i) => {
+    const s = String(lbl);
+    if (!horiz) {
+      const x = groupX(i) + (nBars > 0 ? (nBars*barW)/2 : groupW/2);
+      ctx.textAlign = 'center';
+      if (s.length > 10) {
+        ctx.save(); ctx.translate(x, pad.top+plotH+10); ctx.rotate(-Math.PI/4);
+        ctx.textAlign='right'; ctx.fillText(s.slice(0,16), 0, 0); ctx.restore();
+      } else {
+        ctx.fillText(s, x, pad.top+plotH+14);
+      }
+    } else {
+      const y = groupY(i) + groupW/2;
+      ctx.textAlign = 'right';
+      const display = s.length > 22 ? s.slice(0,21)+'…' : s;
+      ctx.fillText(display, pad.left - 6, y);
+    }
+  });
+
+  /* axes borders */
+  ctx.strokeStyle = GRID_COLOR; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, pad.top+plotH);
+  if (!horiz) ctx.lineTo(pad.left+plotW, pad.top+plotH);
+  ctx.stroke();
+
+  /* legend */
+  if (dsets.length > 1 && cfg.options?.plugins?.legend?.display !== false) {
+    drawLegend(ctx, dsets, W, pad.top - 18);
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w/2, h/2));
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y);
+  ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r);
+  ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h);
+  ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r);
+  ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   LINE CHART
+═══════════════════════════════════════════════════════════════════════ */
+function drawLine(canvas, cfg) {
+  const labels = cfg.data.labels || [];
+  const dsets  = cfg.data.datasets || [];
+  const W = canvas.offsetWidth || 460;
+  const H = canvas.offsetHeight || 240;
+  const ctx = setupCanvas(canvas, W, H);
+  const pad = { ...PAD };
+
+  const allVals = dsets.flatMap(d=>(d.data||[]).filter(v=>v!=null));
+  const sc = niceScale(Math.max(...allVals, 0));
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top  - pad.bottom;
+  const toY   = v => pad.top + plotH - (v - sc.min)/(sc.max - sc.min) * plotH;
+  const toX   = i => pad.left + (i / Math.max(labels.length - 1, 1)) * plotW;
+
+  ctx.clearRect(0, 0, W, H);
+
+  /* grid */
+  let t = sc.min;
+  while (t <= sc.max + sc.step * 0.01) {
+    const y = toY(t);
+    ctx.strokeStyle = GRID_COLOR; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left+plotW, y); ctx.stroke();
+    ctx.font = FONT; ctx.fillStyle = TICK_COLOR; ctx.textAlign = 'right';
+    ctx.fillText(fmtAxis(t, cfg.options?.scales?.y), pad.left-5, y);
+    t = Math.round((t + sc.step) * 1e9) / 1e9;
+    if (t > sc.max * 1.01) break;
+  }
+
+  /* datasets */
+  dsets.forEach(ds => {
+    const data = ds.data || [];
+    const col  = ds.borderColor || '#2389d7';
+    const tension = ds.tension || 0;
+    const dash = ds.borderDash || [];
+
+    // Build valid point list
+    const pts = data.map((v,i) => v!=null ? {x: toX(i), y: toY(v), i} : null);
+    const valid = pts.filter(Boolean);
+    if (valid.length < 2) return;
+
+    /* fill */
+    if (ds.fill !== false && ds.backgroundColor) {
+      ctx.beginPath();
+      ctx.moveTo(valid[0].x, toY(sc.min));
+      valid.forEach(p => ctx.lineTo(p.x, p.y));
+      ctx.lineTo(valid[valid.length-1].x, toY(sc.min));
+      ctx.closePath();
+      ctx.fillStyle = toRgba(ds.backgroundColor, 0.3);
+      ctx.fill();
+    }
+
+    /* line */
+    ctx.strokeStyle = col; ctx.lineWidth = ds.borderWidth || 2;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    if (tension > 0) {
+      ctx.moveTo(valid[0].x, valid[0].y);
+      for (let k=1; k<valid.length; k++) {
+        const cp = (valid[k].x - valid[k-1].x) * tension;
+        ctx.bezierCurveTo(valid[k-1].x+cp, valid[k-1].y, valid[k].x-cp, valid[k].y, valid[k].x, valid[k].y);
+      }
+    } else {
+      valid.forEach((p,k) => k===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    /* points */
+    const pr = ds.pointRadius !== undefined ? ds.pointRadius : 3;
+    if (pr > 0) {
+      ctx.fillStyle = ds.pointBackgroundColor || col;
+      valid.forEach(p => { ctx.beginPath(); ctx.arc(p.x,p.y,pr,0,Math.PI*2); ctx.fill(); });
+    }
+  });
+
+  /* x labels */
+  ctx.font = FONT; ctx.fillStyle = TICK_COLOR; ctx.textAlign = 'center';
+  const skip = Math.max(1, Math.floor(labels.length / 14));
+  labels.forEach((lbl, i) => {
+    if (i % skip !== 0 && i !== labels.length-1) return;
+    ctx.fillText(String(lbl), toX(i), pad.top+plotH+14);
+  });
+
+  /* border */
+  ctx.strokeStyle = GRID_COLOR; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(pad.left,pad.top); ctx.lineTo(pad.left,pad.top+plotH); ctx.lineTo(pad.left+plotW,pad.top+plotH); ctx.stroke();
+
+  /* legend */
+  if (dsets.length > 1 && cfg.options?.plugins?.legend?.display !== false) {
+    drawLegend(ctx, dsets, W, pad.top-18);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   DOUGHNUT CHART
+═══════════════════════════════════════════════════════════════════════ */
+function drawDoughnut(canvas, cfg) {
+  const ds     = cfg.data.datasets[0] || {};
+  const labels = cfg.data.labels || [];
+  const data   = ds.data || [];
+  const colors = ds.backgroundColor || [];
+  const W = canvas.offsetWidth || 300;
+  const H = canvas.offsetHeight || 240;
+  const ctx = setupCanvas(canvas, W, H);
+
+  const total  = data.reduce((a,b)=>a+(b||0), 0);
+  const cutout = parseFloat(cfg.options?.cutout) || 60;
+  const cutFrac= cutout / 100;
+
+  const legendH = labels.length > 0 ? Math.min(labels.length * 18 + 10, 80) : 0;
+  const cx = W / 2;
+  const cy = (H - legendH) / 2 + 4;
+  const outerR = Math.min(cx - 10, cy - 10, 80);
+  const innerR = outerR * cutFrac;
+
+  ctx.clearRect(0, 0, W, H);
+  if (total <= 0) return;
+
+  let angle = -Math.PI / 2;
+  data.forEach((v, i) => {
+    const slice = (v / total) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, outerR, angle, angle + slice);
+    ctx.closePath();
+    ctx.fillStyle = toRgba(colors[i] || '#4472C4', 1);
+    ctx.fill();
+    angle += slice;
+  });
+
+  // cut hole
+  ctx.beginPath();
+  ctx.arc(cx, cy, innerR, 0, Math.PI*2);
+  ctx.fillStyle = '#162032';
+  ctx.fill();
+
+  // centre label
+  if (innerR > 20) {
+    ctx.font = `bold 13px 'IBM Plex Mono',monospace`;
+    ctx.fillStyle = '#f4f8fc'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(fmtNum(total), cx, cy);
+  }
+
+  // legend below
+  const legY = cy + outerR + 14;
+  const itemW = Math.max(80, W / Math.max(labels.length, 1));
+  const perRow = Math.max(1, Math.floor(W / itemW));
+  ctx.font = FONT_LEGEND; ctx.textBaseline = 'middle';
+  labels.forEach((lbl, i) => {
+    const col = i % perRow;
+    const row = Math.floor(i / perRow);
+    const x = (W / 2) - ((Math.min(perRow, labels.length) * itemW) / 2) + col * itemW;
+    const y = legY + row * 18;
+    ctx.fillStyle = toRgba(colors[i] || '#4472C4', 1);
+    ctx.fillRect(x, y - 5, 10, 10);
+    ctx.fillStyle = TICK_COLOR; ctx.textAlign = 'left';
+    const short = String(lbl).length > 18 ? String(lbl).slice(0,17)+'…' : String(lbl);
+    ctx.fillText(short, x + 14, y);
+  });
+}
+
+/* ── shared legend renderer ────────────────────────────────────────────── */
+function drawLegend(ctx, dsets, W, y) {
+  const items = dsets.filter(d => d.label);
+  if (!items.length) return;
+  const itemW = Math.max(100, W / items.length);
+  const startX = (W - items.length * itemW) / 2;
+  ctx.font = FONT_LEGEND; ctx.textBaseline = 'middle';
+  items.forEach((ds, i) => {
+    const x = startX + i * itemW;
+    const col = Array.isArray(ds.backgroundColor) ? ds.backgroundColor[0] : (ds.backgroundColor || ds.borderColor || '#666');
+    ctx.fillStyle = toRgba(col, 0.9);
+    ctx.fillRect(x, y - 4, 10, 10);
+    ctx.fillStyle = TICK_COLOR; ctx.textAlign = 'left';
+    ctx.fillText(ds.label || '', x + 14, y + 1);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PUBLIC API — matches Chart.js interface
+═══════════════════════════════════════════════════════════════════════ */
+function ChartEngine(el, cfg) {
+  this.el  = el;
+  this.cfg = cfg;
+  this._draw();
+  // redraw on resize
+  this._ro = new ResizeObserver(() => this._draw());
+  this._ro.observe(el.parentElement || el);
+}
+
+ChartEngine.prototype._draw = function() {
+  const type = this.cfg.type;
+  if (type === 'doughnut') drawDoughnut(this.el, this.cfg);
+  else if (type === 'line') drawLine(this.el, this.cfg);
+  else drawBar(this.el, this.cfg); // bar + horizontal bar
+};
+
+ChartEngine.prototype.destroy = function() {
+  if (this._ro) this._ro.disconnect();
+  const ctx = this.el.getContext('2d');
+  if (ctx) ctx.clearRect(0, 0, this.el.width, this.el.height);
+};
+
+ChartEngine.defaults = {
+  color: '#8fa3b8',
+  font: { family: "'IBM Plex Mono',monospace", size: 10 },
+  plugins: { legend: { labels: { boxWidth: 11, padding: 12 } } }
+};
+
+global.Chart = ChartEngine;
+})(window);
+
+</script>
 <style>
 :root {
   --navy:    #0d1b2a;
@@ -846,6 +1322,8 @@ const INITS = {
   denials:      initDenialsPage,
   states:       initStates,
   processing:   initProcessing,
+  presidents:   initPresidents,
+  localities:   initLocalities,
   about:        () => {}
 };
 
