@@ -31,7 +31,7 @@ def fetch_all(endpoint, extra_filter="", fields=None):
     records = []
     skip    = 0
     total   = None
-    base_filter = f"fyDeclared ge {START_YEAR}" if "Declaration" in endpoint else f"declarationRequestDate ge '{START_YEAR}-01-01T00:00:00.000Z'"
+    base_filter = f"fyDeclared ge {START_YEAR}" if endpoint == "DisasterDeclarationsSummaries" else f"declarationRequestDate ge '{START_YEAR}-01-01T00:00:00.000Z'"
 
     filt = base_filter
     if extra_filter:
@@ -103,8 +103,18 @@ raw_dec = fetch_all("DisasterDeclarationsSummaries", fields=DEC_FIELDS)
 print(f"  → {len(raw_dec)} declaration records\n")
 
 print("Fetching denials...")
-raw_den = fetch_all("DeclarationDenials", extra_filter="currentRequestStatus eq 'Turndown'", fields=DEN_FIELDS)
-print(f"  → {len(raw_den)} denial records\n")
+try:
+    raw_den = fetch_all("DeclarationDenials", extra_filter="currentRequestStatus eq 'Turndown'", fields=DEN_FIELDS)
+    print(f"  → {len(raw_den)} denial records\n")
+except Exception as e:
+    print(f"  WARNING: Denials fetch failed: {e}")
+    print("  Trying without status filter...")
+    try:
+        raw_den = fetch_all("DeclarationDenials", fields=DEN_FIELDS)
+        print(f"  → {len(raw_den)} denial records\n")
+    except Exception as e2:
+        print(f"  WARNING: Denials unavailable: {e2}\n")
+        raw_den = []
 
 
 # ═════════════════════════════════════════════════════════════════════════
