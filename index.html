@@ -2693,10 +2693,38 @@ function closePaLocality() {
 // ════════════════════════════════════════════════════════
 // HAZARD MITIGATION
 // ════════════════════════════════════════════════════════
-const HM_API    = 'https://www.fema.gov/api/open/v2/HazardMitigationGrants';
-const HM_PROXY  = 'https://femaproxy.josephbrianmoore.workers.dev/HazardMitigationGrants';
+// Correct OpenFEMA endpoint: HazardMitigationAssistanceProjects (dataset v4, API path v2)
+// programArea values: "HMGP", "FMA", "BRIC" (exact short codes)
+const HM_API    = 'https://www.fema.gov/api/open/v2/HazardMitigationAssistanceProjects';
+const HM_PROXY  = 'https://femaproxy.josephbrianmoore.workers.dev/HazardMitigationAssistanceProjects';
+// Correct field names from OpenFEMA data dictionary
+const HM_FIELDS = 'programArea,state,federalShareObligated,typeOfProject,subrecipient,disasterNumber,programFy,region';
 
 let hmInited = false;
+
+// Aggregation helper (defined at module scope so initHM and build path can both use it)
+function hmAgg(records) {
+  const byState = {}, byType = {};
+  let totalObl = 0, subgrantees = new Set(), projects = 0;
+  records.forEach(r => {
+    const st  = r.state || 'Unknown';
+    const obl = parseFloat(r.federalShareObligated) || 0;
+    const typ = (r.typeOfProject || 'Other').trim();
+    byState[st] = (byState[st] || 0) + obl;
+    byType[typ]  = (byType[typ]  || 0) + obl;
+    totalObl += obl;
+    projects++;
+    if (r.subrecipient) subgrantees.add(r.subrecipient);
+  });
+  const topStates = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  const topTypes  = Object.entries(byType).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  return {
+    totalObl, projects,
+    subgrantees: subgrantees.size,
+    topState: topStates[0]?.[0] || '—',
+    topStates, topTypes
+  };
+}
 
 async function initHM() {
   if (hmInited) return;
@@ -2707,100 +2735,51 @@ async function initHM() {
   statusEl.style.color   = 'var(--muted)';
   statusEl.textContent   = 'Loading hazard mitigation data from FEMA API…';
 
-  const programs = { HMGP: [], BRIC: [], FMA: [] };
-
-  function classifyRecord(r) {
-    const prog = (r.programArea || r.program || '').toUpperCase().trim();
-    if (prog === 'HMGP' || prog.includes('HAZARD MITIGATION GRANT')) return 'HMGP';
-    if (prog === 'BRIC' || prog.includes('BUILDING RESILIENT'))       return 'BRIC';
-    if (prog === 'FMA'  || prog.includes('FLOOD MITIGATION'))          return 'FMA';
-    // fallback: if it has a disasterNumber it's likely HMGP
-    if (r.disasterNumber) return 'HMGP';
-    return null;
-  }
-
   try {
-    // Use pre-built summary from data.js if available
+    // ── Fast path: pre-built data from data.js ───────────
     if (HM_NATIONAL && HM_NATIONAL.HMGP && HM_NATIONAL.HMGP.totalObligated) {
       statusEl.style.display = 'none';
-      const hmgp = {
-        totalObl:    HM_NATIONAL.HMGP.totalObligated,
-        projects:    HM_NATIONAL.HMGP.totalProjects,
-        subgrantees: HM_NATIONAL.HMGP.subgrantees,
-        topState:    HM_NATIONAL.HMGP.topState,
-        topStates:   (HM_NATIONAL.HMGP.topStates || []).map(s => [s.state, s.obl]),
-        topTypes:    (HM_NATIONAL.HMGP.topTypes  || []).map(t => [t.type,  t.obl]),
-      };
-      const bric = {
-        totalObl:    HM_NATIONAL.BRIC.totalObligated,
-        projects:    HM_NATIONAL.BRIC.totalProjects,
-        subgrantees: HM_NATIONAL.BRIC.subgrantees,
-        topState:    HM_NATIONAL.BRIC.topState,
-        topStates:   (HM_NATIONAL.BRIC.topStates || []).map(s => [s.state, s.obl]),
-        topTypes:    (HM_NATIONAL.BRIC.topTypes  || []).map(t => [t.type,  t.obl]),
-      };
-      const fma = {
-        totalObl:    HM_NATIONAL.FMA.totalObligated,
-        projects:    HM_NATIONAL.FMA.totalProjects,
-        subgrantees: HM_NATIONAL.FMA.subgrantees,
-        topState:    HM_NATIONAL.FMA.topState,
-        topStates:   (HM_NATIONAL.FMA.topStates || []).map(s => [s.state, s.obl]),
-        topTypes:    (HM_NATIONAL.FMA.topTypes  || []).map(t => [t.type,  t.obl]),
-      };
-      renderHMData(hmgp, bric, fma);
+      const unpack = prog => ({
+        totalObl:    HM_NATIONAL[prog].totalObligated,
+        projects:    HM_NATIONAL[prog].totalProjects,
+        subgrantees: HM_NATIONAL[prog].subgrantees,
+        topState:    HM_NATIONAL[prog].topState,
+        topStates:   (HM_NATIONAL[prog].topStates || []).map(s => [s.state, s.obl]),
+        topTypes:    (HM_NATIONAL[prog].topTypes  || []).map(t => [t.type,  t.obl]),
+      });
+      renderHMData(unpack('HMGP'), unpack('BRIC'), unpack('FMA'));
       return;
     }
 
-    // Fallback: fetch live from FEMA API
+    // ── Slow path: live FEMA API fetch ───────────────────
+    // programArea values: HMGP, FMA, BRIC, PDM, RFC, SRL
+    // We collect HMGP, BRIC, FMA; PDM/RFC/SRL are legacy, excluded
+    const HM_KEEP = new Set(['HMGP', 'BRIC', 'FMA']);
+    const programs = { HMGP: [], BRIC: [], FMA: [] };
+
     let skip = 0, total = null;
-    const fields = 'programArea,state,projectAmount,federalShareObligated,projectType,subgrantee,disasterNumber,status';
-    const base   = `${HM_PROXY}?$top=10000&$select=${encodeURIComponent(fields)}&$inlinecount=allpages`;
+    const base = `${HM_PROXY}?$top=10000&$select=${encodeURIComponent(HM_FIELDS)}&$inlinecount=allpages`;
 
     while (true) {
       const url  = `${base}&$skip=${skip}`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const json  = await resp.json();
-      const batch = json.HazardMitigationGrants || [];
+      // Correct response key is the dataset name
+      const batch = json.HazardMitigationAssistanceProjects || [];
       if (total === null) total = parseInt(json.metadata?.count || 0);
 
       batch.forEach(r => {
-        const bucket = classifyRecord(r);
-        if (bucket) programs[bucket].push(r);
+        const prog = (r.programArea || '').trim().toUpperCase();
+        if (HM_KEEP.has(prog)) programs[prog].push(r);
       });
 
       skip += batch.length;
-      if (batch.length < 10000 || (total && skip >= total)) break;
+      if (!batch.length || (total && skip >= total)) break;
     }
 
     statusEl.style.display = 'none';
-    renderHMData(agg(programs.HMGP), agg(programs.BRIC), agg(programs.FMA));
-
-    // ── Aggregation helper ──────────────────────────────
-    function agg(records) {
-      const byState = {}, byType = {};
-      let totalObl = 0, subgrantees = new Set(), projects = 0;
-      records.forEach(r => {
-        const st  = r.state || 'Unknown';
-        const obl = parseFloat(r.federalShareObligated || r.projectAmount) || 0;
-        const typ = (r.projectType || 'Other').trim();
-        byState[st] = (byState[st] || 0) + obl;
-        byType[typ]  = (byType[typ]  || 0) + obl;
-        totalObl += obl;
-        projects++;
-        if (r.subgrantee) subgrantees.add(r.subgrantee);
-      });
-      const topStates = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,15);
-      const topTypes  = Object.entries(byType).sort((a,b)=>b[1]-a[1]).slice(0,8);
-      return {
-        totalObl, projects,
-        subgrantees: subgrantees.size,
-        topState: topStates[0]?.[0] || '—',
-        topStates, topTypes
-      };
-    }
-
-    renderHMData(agg(programs.HMGP), agg(programs.BRIC), agg(programs.FMA));
+    renderHMData(hmAgg(programs.HMGP), hmAgg(programs.BRIC), hmAgg(programs.FMA));
 
   } catch(e) {
     console.error('HM load error:', e);

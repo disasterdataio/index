@@ -329,28 +329,30 @@ if raw_pa:
 # ═════════════════════════════════════════════════════════════════════════
 
 HM_FIELDS = [
-    "programArea", "state", "projectAmount", "federalShareObligated",
-    "projectType", "subgrantee", "disasterNumber", "status"
+    # Correct field names from OpenFEMA HazardMitigationAssistanceProjects v4 data dictionary
+    "programArea", "state", "federalShareObligated",
+    "typeOfProject", "subrecipient", "disasterNumber", "programFy", "region"
 ]
 
 def classify_hm(r):
-    prog = (r.get("programArea") or r.get("program") or "").upper().strip()
-    if prog == "HMGP" or "HAZARD MITIGATION GRANT" in prog: return "HMGP"
-    if prog == "BRIC" or "BUILDING RESILIENT" in prog:       return "BRIC"
-    if prog == "FMA"  or "FLOOD MITIGATION" in prog:          return "FMA"
-    if r.get("disasterNumber"):                               return "HMGP"
+    # programArea values are exact short codes: HMGP, FMA, BRIC, PDM, RFC, SRL
+    prog = (r.get("programArea") or "").strip().upper()
+    if prog in ("HMGP",): return "HMGP"
+    if prog in ("BRIC",): return "BRIC"
+    if prog in ("FMA",):  return "FMA"
+    # PDM is legacy (replaced by BRIC 2020), RFC/SRL folded into FMA — exclude
     return None
 
 def fetch_hm_all():
-    """Fetch all HazardMitigationGrants records for national summary."""
+    """Fetch all HazardMitigationAssistanceProjects records for national summary."""
     records = []
     skip    = 0
     total   = None
     select  = ",".join(HM_FIELDS)
-    print("  Fetching HazardMitigationGrants (national)...")
+    print("  Fetching HazardMitigationAssistanceProjects (national)...")
 
     while True:
-        url = (f"{BASE_URL}/HazardMitigationGrants"
+        url = (f"{BASE_URL}/HazardMitigationAssistanceProjects"
                f"?$top={PAGE_SIZE}&$skip={skip}"
                f"&$select={select}"
                f"&$inlinecount=allpages")
@@ -367,7 +369,8 @@ def fetch_hm_all():
                 print(f"    Retry {attempt+1}: {e}")
                 time.sleep(5)
 
-        batch = data.get("HazardMitigationGrants", [])
+        # Correct response key matches dataset name
+        batch = data.get("HazardMitigationAssistanceProjects", [])
         records.extend(batch)
 
         if total is None:
@@ -403,13 +406,13 @@ def agg_hm_program(records):
     projects = 0
     for r in records:
         st  = r.get("state") or "Unknown"
-        obl = float(r.get("federalShareObligated") or r.get("projectAmount") or 0)
-        typ = (r.get("projectType") or "Other").strip()
+        obl = float(r.get("federalShareObligated") or 0)
+        typ = (r.get("typeOfProject") or "Other").strip()
         by_state[st] += obl
         by_type[typ]  += obl
         total_obl    += obl
         projects     += 1
-        sg = r.get("subgrantee")
+        sg = r.get("subrecipient")
         if sg: subgrantees.add(sg)
     top_states = sorted([{"state": k, "obl": round(v, 2)} for k,v in by_state.items()],
                         key=lambda x: -x["obl"])[:15]
