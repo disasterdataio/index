@@ -199,6 +199,7 @@ tbody td { padding: 8px 13px; font-size: 12px; color: var(--text); white-space: 
     <button onclick="showPage('processing',this)">Processing Time</button>
     <button onclick="showPage('presidents',this)">By President</button>
     <button onclick="showPage('pa',this)">Public Assistance</button>
+    <button onclick="showPage('hm',this)">Hazard Mitigation</button>
     <button onclick="showPage('about',this)">About</button>
   </nav>
 </header>
@@ -796,7 +797,7 @@ tbody td { padding: 8px 13px; font-size: 12px; color: var(--text); white-space: 
 
   <!-- Summary charts - loaded on first visit -->
   <div class="kpi-strip" id="pa-national-kpis">
-    <div class="kpi-card blue"><div class="kpi-val" id="pa-kpi-total">—</div><div class="kpi-label">Total PA Obligated (2000+)</div></div>
+    <div class="kpi-card blue"><div class="kpi-val" id="pa-kpi-total">—</div><div class="kpi-label">Total PA Obligated</div></div>
     <div class="kpi-card sky"><div class="kpi-val" id="pa-kpi-projects">—</div><div class="kpi-label">Total Projects</div></div>
     <div class="kpi-card teal"><div class="kpi-val" id="pa-kpi-disasters">—</div><div class="kpi-label">Disasters with PA</div></div>
     <div class="kpi-card gold"><div class="kpi-val" id="pa-kpi-avg">—</div><div class="kpi-label">Largest Project</div></div>
@@ -909,6 +910,90 @@ tbody td { padding: 8px 13px; font-size: 12px; color: var(--text); white-space: 
         <div class="pagination" id="pa-locality-pagination"></div>
       </div>
     </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     HAZARD MITIGATION
+═══════════════════════════════════════════════════════════ -->
+<div id="page-hm" class="page">
+
+  <!-- Cumulative KPI strip -->
+  <div class="kpi-strip" id="hm-national-kpis">
+    <div class="kpi-card blue"><div class="kpi-val" id="hm-kpi-total">—</div><div class="kpi-label">Total HM Obligated</div></div>
+    <div class="kpi-card sky"><div class="kpi-val" id="hm-kpi-projects">—</div><div class="kpi-label">Total Projects</div></div>
+    <div class="kpi-card teal"><div class="kpi-val" id="hm-kpi-subgrantees">—</div><div class="kpi-label">Subgrantees</div></div>
+    <div class="kpi-card gold"><div class="kpi-val" id="hm-kpi-top-state">—</div><div class="kpi-label">Top State by HM $</div></div>
+    <div class="kpi-card green"><div class="kpi-val" id="hm-kpi-hmgp">—</div><div class="kpi-label">HMGP Obligated</div></div>
+    <div class="kpi-card orange"><div class="kpi-val" id="hm-kpi-bric-fma">—</div><div class="kpi-label">BRIC + FMA Obligated</div></div>
+  </div>
+
+  <!-- ── HMGP ── -->
+  <div class="ov-section-header" style="background:linear-gradient(90deg,rgba(26,111,181,.25) 0%,transparent 100%);border-left:4px solid var(--blue2);margin-top:4px">
+    <span class="ov-section-icon">🌊</span>
+    <span>HAZARD MITIGATION GRANT PROGRAM (HMGP)</span>
+    <span class="ov-section-count" id="hm-hmgp-count"></span>
+  </div>
+  <div class="note-box" style="margin-bottom:16px">
+    HMGP provides grants to states, tribes, and territories following a Presidential Major Disaster Declaration (DR). Funds long-term mitigation measures that reduce the risk of loss of life and property from future disasters. Federal share is 75% of eligible costs.
+  </div>
+  <div class="kpi-strip" id="hm-hmgp-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px"></div>
+  <div class="chart-grid-2" style="margin-bottom:18px">
+    <div class="chart-card">
+      <div class="chart-title">HMGP Obligations — Top 15 States</div>
+      <canvas id="hm-hmgp-states" height="240"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">HMGP Obligations by Project Type</div>
+      <canvas id="hm-hmgp-types" height="240"></canvas>
+    </div>
+  </div>
+
+  <!-- ── BRIC ── -->
+  <div class="ov-section-header" style="background:linear-gradient(90deg,rgba(39,174,96,.2) 0%,transparent 100%);border-left:4px solid var(--green);margin-top:8px">
+    <span class="ov-section-icon">🏗️</span>
+    <span>BUILDING RESILIENT INFRASTRUCTURE &amp; COMMUNITIES (BRIC)</span>
+    <span class="ov-section-count" id="hm-bric-count"></span>
+  </div>
+  <div class="note-box" style="margin-bottom:16px">
+    BRIC supports pre-disaster mitigation activities — not tied to a specific disaster declaration. Encourages investments in critical services, lifeline infrastructure, and community-wide resilience. Replaced the Pre-Disaster Mitigation (PDM) grant program in FY2020.
+  </div>
+  <div class="kpi-strip" id="hm-bric-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px"></div>
+  <div class="chart-grid-2" style="margin-bottom:18px">
+    <div class="chart-card">
+      <div class="chart-title">BRIC Obligations — Top 15 States</div>
+      <canvas id="hm-bric-states" height="240"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">BRIC Obligations by Project Type</div>
+      <canvas id="hm-bric-types" height="240"></canvas>
+    </div>
+  </div>
+
+  <!-- ── FMA ── -->
+  <div class="ov-section-header" style="background:linear-gradient(90deg,rgba(240,180,41,.18) 0%,transparent 100%);border-left:4px solid var(--gold);margin-top:8px">
+    <span class="ov-section-icon">🏘️</span>
+    <span>FLOOD MITIGATION ASSISTANCE (FMA)</span>
+    <span class="ov-section-count" id="hm-fma-count"></span>
+  </div>
+  <div class="note-box" style="margin-bottom:16px">
+    FMA provides grants to reduce or eliminate the risk of repetitive flood damage to buildings insured under the National Flood Insurance Program (NFIP). Targets properties with repetitive or severe repetitive loss claims. Federal share is 75–100% of eligible costs for highest-risk properties.
+  </div>
+  <div class="kpi-strip" id="hm-fma-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px"></div>
+  <div class="chart-grid-2" style="margin-bottom:18px">
+    <div class="chart-card">
+      <div class="chart-title">FMA Obligations — Top 15 States</div>
+      <canvas id="hm-fma-states" height="240"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">FMA Obligations by Project Type</div>
+      <canvas id="hm-fma-types" height="240"></canvas>
+    </div>
+  </div>
+
+  <div id="hm-status" style="display:none;font-family:var(--font-mono);font-size:12px;color:var(--muted);padding:20px;text-align:center">
+    Loading hazard mitigation data from FEMA API...
   </div>
 
 </div>
@@ -1053,6 +1138,7 @@ function incColors(types) {
 }
 
 let PA_NATIONAL = {};
+let HM_NATIONAL = {};
 let chartRegistry = {};
 
 function makeChart(id, config) {
@@ -1081,6 +1167,7 @@ const INITS = {
   presidents:   initPresidents,
   localities:   initLocalities,
   pa:           initPA,
+  hm:           initHM,
   about:        () => {}
 };
 
@@ -2325,9 +2412,9 @@ async function loadPaNational() {
     const topState=Object.entries(byState).sort((a,b)=>b[1].obl-a[1].obl)[0];
     const topCat=Object.entries(byCat).sort((a,b)=>b[1].obl-a[1].obl)[0];
 
-    document.getElementById('pa-kpi-total').textContent     = fmtDollar(totalObl)+' (sample)';
-    document.getElementById('pa-kpi-projects').textContent  = totalProj.toLocaleString()+'+';
-    document.getElementById('pa-kpi-disasters').textContent = disasters.size.toLocaleString()+'+';
+    document.getElementById('pa-kpi-total').textContent     = fmtDollar(totalObl);
+    document.getElementById('pa-kpi-projects').textContent  = totalProj.toLocaleString();
+    document.getElementById('pa-kpi-disasters').textContent = disasters.size.toLocaleString();
     document.getElementById('pa-kpi-avg').textContent       = fmtDollar(largest);
     document.getElementById('pa-kpi-top-state').textContent = topState?topState[0]:'—';
     document.getElementById('pa-kpi-top-cat').textContent   = topCat?topCat[0].replace(', and Other Items',''):'—';
@@ -2601,6 +2688,210 @@ function clearPaState() {
 
 function closePaLocality() {
   document.getElementById('pa-locality-detail').style.display='none';
+}
+
+// ════════════════════════════════════════════════════════
+// HAZARD MITIGATION
+// ════════════════════════════════════════════════════════
+const HM_API    = 'https://www.fema.gov/api/open/v2/HazardMitigationGrants';
+const HM_PROXY  = 'https://femaproxy.josephbrianmoore.workers.dev/HazardMitigationGrants';
+
+let hmInited = false;
+
+async function initHM() {
+  if (hmInited) return;
+  hmInited = true;
+
+  const statusEl = document.getElementById('hm-status');
+  statusEl.style.display = 'block';
+  statusEl.style.color   = 'var(--muted)';
+  statusEl.textContent   = 'Loading hazard mitigation data from FEMA API…';
+
+  const programs = { HMGP: [], BRIC: [], FMA: [] };
+
+  function classifyRecord(r) {
+    const prog = (r.programArea || r.program || '').toUpperCase().trim();
+    if (prog === 'HMGP' || prog.includes('HAZARD MITIGATION GRANT')) return 'HMGP';
+    if (prog === 'BRIC' || prog.includes('BUILDING RESILIENT'))       return 'BRIC';
+    if (prog === 'FMA'  || prog.includes('FLOOD MITIGATION'))          return 'FMA';
+    // fallback: if it has a disasterNumber it's likely HMGP
+    if (r.disasterNumber) return 'HMGP';
+    return null;
+  }
+
+  try {
+    // Use pre-built summary from data.js if available
+    if (HM_NATIONAL && HM_NATIONAL.HMGP && HM_NATIONAL.HMGP.totalObligated) {
+      statusEl.style.display = 'none';
+      const hmgp = {
+        totalObl:    HM_NATIONAL.HMGP.totalObligated,
+        projects:    HM_NATIONAL.HMGP.totalProjects,
+        subgrantees: HM_NATIONAL.HMGP.subgrantees,
+        topState:    HM_NATIONAL.HMGP.topState,
+        topStates:   (HM_NATIONAL.HMGP.topStates || []).map(s => [s.state, s.obl]),
+        topTypes:    (HM_NATIONAL.HMGP.topTypes  || []).map(t => [t.type,  t.obl]),
+      };
+      const bric = {
+        totalObl:    HM_NATIONAL.BRIC.totalObligated,
+        projects:    HM_NATIONAL.BRIC.totalProjects,
+        subgrantees: HM_NATIONAL.BRIC.subgrantees,
+        topState:    HM_NATIONAL.BRIC.topState,
+        topStates:   (HM_NATIONAL.BRIC.topStates || []).map(s => [s.state, s.obl]),
+        topTypes:    (HM_NATIONAL.BRIC.topTypes  || []).map(t => [t.type,  t.obl]),
+      };
+      const fma = {
+        totalObl:    HM_NATIONAL.FMA.totalObligated,
+        projects:    HM_NATIONAL.FMA.totalProjects,
+        subgrantees: HM_NATIONAL.FMA.subgrantees,
+        topState:    HM_NATIONAL.FMA.topState,
+        topStates:   (HM_NATIONAL.FMA.topStates || []).map(s => [s.state, s.obl]),
+        topTypes:    (HM_NATIONAL.FMA.topTypes  || []).map(t => [t.type,  t.obl]),
+      };
+      renderHMData(hmgp, bric, fma);
+      return;
+    }
+
+    // Fallback: fetch live from FEMA API
+    let skip = 0, total = null;
+    const fields = 'programArea,state,projectAmount,federalShareObligated,projectType,subgrantee,disasterNumber,status';
+    const base   = `${HM_PROXY}?$top=10000&$select=${encodeURIComponent(fields)}&$inlinecount=allpages`;
+
+    while (true) {
+      const url  = `${base}&$skip=${skip}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const json  = await resp.json();
+      const batch = json.HazardMitigationGrants || [];
+      if (total === null) total = parseInt(json.metadata?.count || 0);
+
+      batch.forEach(r => {
+        const bucket = classifyRecord(r);
+        if (bucket) programs[bucket].push(r);
+      });
+
+      skip += batch.length;
+      if (batch.length < 10000 || (total && skip >= total)) break;
+    }
+
+    statusEl.style.display = 'none';
+    renderHMData(agg(programs.HMGP), agg(programs.BRIC), agg(programs.FMA));
+
+    // ── Aggregation helper ──────────────────────────────
+    function agg(records) {
+      const byState = {}, byType = {};
+      let totalObl = 0, subgrantees = new Set(), projects = 0;
+      records.forEach(r => {
+        const st  = r.state || 'Unknown';
+        const obl = parseFloat(r.federalShareObligated || r.projectAmount) || 0;
+        const typ = (r.projectType || 'Other').trim();
+        byState[st] = (byState[st] || 0) + obl;
+        byType[typ]  = (byType[typ]  || 0) + obl;
+        totalObl += obl;
+        projects++;
+        if (r.subgrantee) subgrantees.add(r.subgrantee);
+      });
+      const topStates = Object.entries(byState).sort((a,b)=>b[1]-a[1]).slice(0,15);
+      const topTypes  = Object.entries(byType).sort((a,b)=>b[1]-a[1]).slice(0,8);
+      return {
+        totalObl, projects,
+        subgrantees: subgrantees.size,
+        topState: topStates[0]?.[0] || '—',
+        topStates, topTypes
+      };
+    }
+
+    renderHMData(agg(programs.HMGP), agg(programs.BRIC), agg(programs.FMA));
+
+  } catch(e) {
+    console.error('HM load error:', e);
+    statusEl.style.display  = 'block';
+    statusEl.style.color    = 'var(--red2)';
+    statusEl.textContent    = `Error loading hazard mitigation data: ${e.message}`;
+  }
+}
+
+function renderHMData(hmgp, bric, fma) {
+  // ── Cumulative KPIs ─────────────────────────────────
+  const grandTotal    = hmgp.totalObl + bric.totalObl + fma.totalObl;
+  const grandProjects = hmgp.projects + bric.projects + fma.projects;
+  const grandSubs     = hmgp.subgrantees + bric.subgrantees + fma.subgrantees;
+
+  // Top state across all programs
+  const allByState = {};
+  [[hmgp],[bric],[fma]].forEach(([d]) => {
+    d.topStates.forEach(([st, obl]) => {
+      allByState[st] = (allByState[st] || 0) + obl;
+    });
+  });
+  const topStateAll = Object.entries(allByState).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
+
+  document.getElementById('hm-kpi-total').textContent       = fmtDollar(grandTotal);
+  document.getElementById('hm-kpi-projects').textContent    = grandProjects.toLocaleString();
+  document.getElementById('hm-kpi-subgrantees').textContent = grandSubs.toLocaleString();
+  document.getElementById('hm-kpi-top-state').textContent   = topStateAll;
+  document.getElementById('hm-kpi-hmgp').textContent        = fmtDollar(hmgp.totalObl);
+  document.getElementById('hm-kpi-bric-fma').textContent    = fmtDollar(bric.totalObl + fma.totalObl);
+
+  // ── Per-program renderer ────────────────────────────
+  function renderProgram(prefix, data) {
+    const countEl = document.getElementById(`hm-${prefix}-count`);
+    if (countEl) countEl.textContent =
+      `${data.projects.toLocaleString()} projects · ${fmtDollar(data.totalObl)}`;
+
+    document.getElementById(`hm-${prefix}-kpis`).innerHTML = [
+      kpiHTML(fmtDollar(data.totalObl),          'Fed. Share Obligated', 'blue'),
+      kpiHTML(data.projects.toLocaleString(),      'Projects',            'sky'),
+      kpiHTML(data.subgrantees.toLocaleString(),   'Subgrantees',         'teal'),
+      kpiHTML(data.topState,                       'Top State',           'gold'),
+    ].join('');
+
+    const fmtTick = v => '$' + (v >= 1e9 ? (v/1e9).toFixed(1)+'B' : Math.round(v/1e6)+'M');
+
+    chartRegistry[`hm-${prefix}-states`]?.destroy();
+    chartRegistry[`hm-${prefix}-states`] = new Chart(
+      document.getElementById(`hm-${prefix}-states`), {
+        type: 'bar',
+        data: {
+          labels:   data.topStates.map(s => s[0]),
+          datasets: [{ label:'Fed. Share', data: data.topStates.map(s => s[1]),
+            backgroundColor: PAL, borderRadius: 3 }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false } },
+            y: { grid: GRID, beginAtZero: true, ticks: { callback: fmtTick } }
+          }
+        }
+      }
+    );
+
+    chartRegistry[`hm-${prefix}-types`]?.destroy();
+    chartRegistry[`hm-${prefix}-types`] = new Chart(
+      document.getElementById(`hm-${prefix}-types`), {
+        type: 'bar',
+        data: {
+          labels:   data.topTypes.map(t => t[0]),
+          datasets: [{ label:'Fed. Share', data: data.topTypes.map(t => t[1]),
+            backgroundColor: PAL.map(c => c + 'cc'), borderRadius: 3 }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: GRID, ticks: { callback: fmtTick } },
+            y: { grid: { display: false } }
+          }
+        }
+      }
+    );
+  }
+
+  renderProgram('hmgp', hmgp);
+  renderProgram('bric', bric);
+  renderProgram('fma',  fma);
 }
 
 // Load PA_NATIONAL from data.js if not already populated

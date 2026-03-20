@@ -325,6 +325,125 @@ if raw_pa:
 
 
 # ═════════════════════════════════════════════════════════════════════════
+# 2c. FETCH HAZARD MITIGATION GRANTS NATIONAL SUMMARY
+# ═════════════════════════════════════════════════════════════════════════
+
+HM_FIELDS = [
+    "programArea", "state", "projectAmount", "federalShareObligated",
+    "projectType", "subgrantee", "disasterNumber", "status"
+]
+
+def classify_hm(r):
+    prog = (r.get("programArea") or r.get("program") or "").upper().strip()
+    if prog == "HMGP" or "HAZARD MITIGATION GRANT" in prog: return "HMGP"
+    if prog == "BRIC" or "BUILDING RESILIENT" in prog:       return "BRIC"
+    if prog == "FMA"  or "FLOOD MITIGATION" in prog:          return "FMA"
+    if r.get("disasterNumber"):                               return "HMGP"
+    return None
+
+def fetch_hm_all():
+    """Fetch all HazardMitigationGrants records for national summary."""
+    records = []
+    skip    = 0
+    total   = None
+    select  = ",".join(HM_FIELDS)
+    print("  Fetching HazardMitigationGrants (national)...")
+
+    while True:
+        url = (f"{BASE_URL}/HazardMitigationGrants"
+               f"?$top={PAGE_SIZE}&$skip={skip}"
+               f"&$select={select}"
+               f"&$inlinecount=allpages")
+
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "DisasterData-Explorer/1.0"})
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    data = json.loads(resp.read())
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                print(f"    Retry {attempt+1}: {e}")
+                time.sleep(5)
+
+        batch = data.get("HazardMitigationGrants", [])
+        records.extend(batch)
+
+        if total is None:
+            total = int(data.get("metadata", {}).get("count", 0))
+            print(f"    Total HM records: {total:,}")
+
+        skip += len(batch)
+        if skip % 50000 == 0 or (total and skip >= total):
+            print(f"    Fetched {skip:,}/{total:,}")
+
+        if not batch or (total and skip >= total):
+            break
+        time.sleep(SLEEP_SEC)
+
+    return records
+
+print("Fetching Hazard Mitigation grant data...")
+try:
+    raw_hm = fetch_hm_all()
+    print(f"  → {len(raw_hm):,} HM grant records\n")
+    HM_AVAILABLE = True
+except Exception as e:
+    print(f"  WARNING: HM fetch failed: {e}\n")
+    raw_hm = []
+    HM_AVAILABLE = False
+
+# Build HM national summary aggregates per program
+def agg_hm_program(records):
+    by_state = defaultdict(float)
+    by_type  = defaultdict(float)
+    total_obl = 0.0
+    subgrantees = set()
+    projects = 0
+    for r in records:
+        st  = r.get("state") or "Unknown"
+        obl = float(r.get("federalShareObligated") or r.get("projectAmount") or 0)
+        typ = (r.get("projectType") or "Other").strip()
+        by_state[st] += obl
+        by_type[typ]  += obl
+        total_obl    += obl
+        projects     += 1
+        sg = r.get("subgrantee")
+        if sg: subgrantees.add(sg)
+    top_states = sorted([{"state": k, "obl": round(v, 2)} for k,v in by_state.items()],
+                        key=lambda x: -x["obl"])[:15]
+    top_types  = sorted([{"type": k, "obl": round(v, 2)} for k,v in by_type.items()],
+                        key=lambda x: -x["obl"])[:10]
+    return {
+        "totalObligated":  round(total_obl, 2),
+        "totalProjects":   projects,
+        "subgrantees":     len(subgrantees),
+        "topState":        top_states[0]["state"] if top_states else "—",
+        "topStates":       top_states,
+        "topTypes":        top_types,
+    }
+
+hm_national = {}
+if raw_hm:
+    buckets = {"HMGP": [], "BRIC": [], "FMA": []}
+    for r in raw_hm:
+        bucket = classify_hm(r)
+        if bucket:
+            buckets[bucket].append(r)
+
+    hm_national = {
+        "HMGP": agg_hm_program(buckets["HMGP"]),
+        "BRIC": agg_hm_program(buckets["BRIC"]),
+        "FMA":  agg_hm_program(buckets["FMA"]),
+    }
+    total_all = sum(hm_national[p]["totalObligated"] for p in hm_national)
+    print(f"  HM summary: ${total_all/1e9:.1f}B total | "
+          f"HMGP {len(buckets['HMGP']):,} | BRIC {len(buckets['BRIC']):,} | FMA {len(buckets['FMA']):,}")
+
+
+
+# ═════════════════════════════════════════════════════════════════════════
 # 3. AGGREGATE SUMMARY DATA
 # ═════════════════════════════════════════════════════════════════════════
 
@@ -829,7 +948,8 @@ lines = [
     f'window.ERA_FY_MAP       ={json.dumps(ERA_FY_MAP,      separators=(",",":"))}',
     f'window.ERA_TOTAL_KEYS   ={json.dumps(ERA_TOTAL_KEYS,  separators=(",",":"))}',
     f'window.DATA_DATE        ="{TODAY}"',
-    f'window.PA_NATIONAL      ={json.dumps(pa_national, separators=(",",":"))}',
+    f'window.PA_NATIONAL      ={json.dumps(pa_national,  separators=(",",":"))}',
+    f'window.HM_NATIONAL      ={json.dumps(hm_national,  separators=(",",":"))}',
     "document.dispatchEvent(new Event('dataReady'));",
 ]
 
@@ -852,6 +972,13 @@ if os.path.exists("index.html"):
     html = re.sub(
         r'let PA_NATIONAL\s*=\s*\{[^;]*\};',
         f'let PA_NATIONAL = {pa_json};',
+        html
+    )
+    # Inject HM_NATIONAL directly
+    hm_json = json.dumps(hm_national, separators=(",",":"))
+    html = re.sub(
+        r'let HM_NATIONAL\s*=\s*\{[^;]*\};',
+        f'let HM_NATIONAL = {hm_json};',
         html
     )
     with open("index.html", "w", encoding="utf-8") as f:
