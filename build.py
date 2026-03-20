@@ -49,7 +49,7 @@ def fetch_all(endpoint, extra_filter="", fields=None):
             f"&$skip={skip}"
             f"&$filter={urllib.parse.quote(filt)}"
             f"&$inlinecount=allpages"
-            f"&$orderby=id asc"
+            f"&$orderby=id%20asc"
             + select_param
         )
         url = f"{BASE_URL}/{endpoint}{params}"
@@ -176,6 +176,142 @@ for r in raw_den:
     })
 
 print(f"  → {len(den_processed)} processed\n")
+
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 2b. FETCH PUBLIC ASSISTANCE NATIONAL SUMMARY
+# ═════════════════════════════════════════════════════════════════════════
+
+PA_BASE    = "https://www.fema.gov/api/open/v2"
+PA_FIELDS  = [
+    "disasterNumber", "stateAbbreviation", "federalShareObligated",
+    "totalObligated", "damageCategoryCode", "damageCategoryDescrip",
+    "declarationDate", "incidentType"
+]
+
+def fetch_pa_all():
+    """Fetch all PA funded projects details (2000+) for national summary."""
+    records = []
+    skip    = 0
+    total   = None
+    filt    = urllib.parse.quote("declarationDate ge '2000-01-01T00:00:00.000Z'")
+    select  = ",".join(PA_FIELDS)
+    print("  Fetching PublicAssistanceFundedProjectsDetails (national)...")
+
+    while True:
+        url = (f"{PA_BASE}/PublicAssistanceFundedProjectsDetails"
+               f"?$top={PAGE_SIZE}&$skip={skip}"
+               f"&$filter={filt}"
+               f"&$select={select}"
+               f"&$inlinecount=allpages")
+
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "DisasterData-Explorer/1.0"})
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    data = json.loads(resp.read())
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                print(f"    Retry {attempt+1}: {e}")
+                time.sleep(5)
+
+        batch = data.get("PublicAssistanceFundedProjectsDetails", [])
+        records.extend(batch)
+
+        if total is None:
+            total = int(data.get("metadata", {}).get("count", 0))
+            print(f"    Total PA records: {total:,}")
+
+        skip += len(batch)
+        if skip % 50000 == 0 or skip >= total:
+            print(f"    Fetched {skip:,}/{total:,}")
+
+        if not batch or (total and skip >= total):
+            break
+        time.sleep(SLEEP_SEC)
+
+    return records
+
+print("Fetching PA data (this may take several minutes)...")
+try:
+    raw_pa = fetch_pa_all()
+    print(f"  → {len(raw_pa):,} PA project records\n")
+    PA_AVAILABLE = True
+except Exception as e:
+    print(f"  WARNING: PA fetch failed: {e}")
+    print("  PA national summary will be skipped.\n")
+    raw_pa = []
+    PA_AVAILABLE = False
+
+# Build PA national summary aggregates
+pa_national = {}
+if raw_pa:
+    pa_by_state   = {}
+    pa_by_cat     = {}
+    pa_by_disaster = {}
+    pa_total_obl  = 0
+    pa_total_proj = 0
+    pa_disasters  = set()
+
+    DCC_LABELS = {
+        "A":"Debris Removal","B":"Emergency Protective Measures",
+        "C":"Roads & Bridges","D":"Water Control Facilities",
+        "E":"Buildings & Equipment","F":"Utilities",
+        "G":"Parks, Recreational, and Other Items","Z":"State Management"
+    }
+
+    for r in raw_pa:
+        st   = r.get("stateAbbreviation") or "Unknown"
+        obl  = float(r.get("federalShareObligated") or 0)
+        tot  = float(r.get("totalObligated") or 0)
+        cat  = r.get("damageCategoryDescrip") or DCC_LABELS.get(r.get("damageCategoryCode",""), "Other")
+        dn   = r.get("disasterNumber")
+
+        pa_total_obl  += obl
+        pa_total_proj += 1
+        if dn: pa_disasters.add(dn)
+
+        if st not in pa_by_state:
+            pa_by_state[st] = {"obl": 0, "tot": 0, "proj": 0}
+        pa_by_state[st]["obl"]  += obl
+        pa_by_state[st]["tot"]  += tot
+        pa_by_state[st]["proj"] += 1
+
+        if cat not in pa_by_cat:
+            pa_by_cat[cat] = {"obl": 0, "proj": 0}
+        pa_by_cat[cat]["obl"]  += obl
+        pa_by_cat[cat]["proj"] += 1
+
+    # Top 15 states by federal share
+    top_states = sorted(
+        [{"state": k, "obl": round(v["obl"],2), "proj": v["proj"]} for k,v in pa_by_state.items()],
+        key=lambda x: -x["obl"]
+    )[:15]
+
+    # All categories sorted by federal share
+    top_cats = sorted(
+        [{"cat": k, "obl": round(v["obl"],2), "proj": v["proj"]} for k,v in pa_by_cat.items()],
+        key=lambda x: -x["obl"]
+    )
+
+    # Largest single project
+    largest = max((float(r.get("federalShareObligated") or 0) for r in raw_pa), default=0)
+
+    pa_national = {
+        "totalObligated":  round(pa_total_obl, 2),
+        "totalProjects":   pa_total_proj,
+        "totalDisasters":  len(pa_disasters),
+        "largestProject":  round(largest, 2),
+        "topState":        top_states[0]["state"] if top_states else "—",
+        "topCategory":     top_cats[0]["cat"] if top_cats else "—",
+        "topStates":       top_states,
+        "topCategories":   top_cats,
+    }
+    print(f"  PA summary: ${pa_total_obl/1e9:.1f}B total, {len(pa_disasters):,} disasters, {pa_total_proj:,} projects")
+
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -505,21 +641,21 @@ print("Aggregation complete.\n")
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# 4. BUILD HTML
+
+# Helper for grouping by state
+def groupby_state(records):
+    from collections import defaultdict
+    state_map = defaultdict(list)
+    for r in records:
+        state_map[r.get("state","")].append(r)
+    return state_map.items()
+
+# 4. BUILD data.js
 # ═════════════════════════════════════════════════════════════════════════
 
-print("Building HTML...")
+print("Building data.js...")
 
-# Read the template and inject data
-# All data is serialised to JSON and embedded directly in the HTML.
-summary_json          = json.dumps(summary,          separators=(",",":"))
-state_summary_json    = json.dumps(state_summary,    separators=(",",":"))
-state_yoy_json        = json.dumps(state_yoy,        separators=(",",":"))
-state_inc_json        = json.dumps(state_inc,        separators=(",",":"))
-state_disasters_json  = json.dumps(dict(state_disasters), separators=(",",":"))
-denials_json          = json.dumps(den_processed,    separators=(",",":"))
-browse_json           = json.dumps(browse,           separators=(",",":"))
-era_json              = json.dumps(era_data,         separators=(",",":"))
+import re, os
 
 STATE_NAMES = {
     "AK":"Alaska","AL":"Alabama","AR":"Arkansas","AS":"American Samoa","AZ":"Arizona",
@@ -534,60 +670,178 @@ STATE_NAMES = {
     "TN":"Tennessee","TX":"Texas","UT":"Utah","VA":"Virginia","VI":"U.S. Virgin Islands",
     "VT":"Vermont","WA":"Washington","WI":"Wisconsin","WV":"West Virginia","WY":"Wyoming",
 }
-state_names_json = json.dumps(STATE_NAMES, separators=(",",":"))
 
-# Read the current index.html template (if it exists) or use a placeholder
-# In the GitHub Actions workflow the previous index.html is already checked out
-import os
-template_path = "index.html"
+# Presidential term FY mapping (for client-side era filtering)
+ERA_FY_MAP = {
+    2001:"bush_t1",2002:"bush_t1",2003:"bush_t1",2004:"bush_t1",
+    2005:"bush_t2",2006:"bush_t2",2007:"bush_t2",2008:"bush_t2",
+    2009:"obama_t1",2010:"obama_t1",2011:"obama_t1",2012:"obama_t1",
+    2013:"obama_t2",2014:"obama_t2",2015:"obama_t2",2016:"obama_t2",
+    2017:"trump_t1",2018:"trump_t1",2019:"trump_t1",2020:"trump_t1",
+    2021:"biden",2022:"biden",2023:"biden",2024:"biden",
+    2025:"trump_t2",
+}
+ERA_TOTAL_KEYS = {
+    "bush_total":  ["bush_t1","bush_t2"],
+    "obama_total": ["obama_t1","obama_t2"],
+    "trump_total": ["trump_t1","trump_t2"],
+}
 
-if os.path.exists(template_path):
-    with open(template_path, encoding="utf-8") as f:
+# Build era_data for PRES_DATA (without disaster lists — those come from BROWSE)
+era_dec_map  = defaultdict(lambda: {"declarations": 0, "days": []})
+era_den_map  = defaultdict(lambda: {"denials": 0, "days": []})
+
+for r in dec_valid:
+    era = ERA_FY_MAP.get(r["fyDeclared"])
+    if era:
+        era_dec_map[era]["declarations"] += 1
+        era_dec_map[era]["days"].append(r["days_to_approve"])
+
+for r in den_valid:
+    yr  = int(r["declarationRequestDate"][:4]) if r["declarationRequestDate"] else 0
+    era = ERA_FY_MAP.get(yr)
+    if era:
+        era_den_map[era]["denials"] += 1
+        era_den_map[era]["days"].append(r["days_to_deny"])
+
+def era_stats_dict(keys):
+    d  = sum(era_dec_map[k]["declarations"] for k in keys)
+    dn = sum(era_den_map[k]["denials"]      for k in keys)
+    tr = d + dn
+    dd = [x for k in keys for x in era_dec_map[k]["days"]]
+    nd = [x for k in keys for x in era_den_map[k]["days"]]
+    return {
+        "declarations": d, "denials": dn, "total_requests": tr,
+        "denial_rate":  round(dn/tr*100, 2) if tr else 0,
+        "avg_days":     round(sum(dd)/len(dd), 1) if dd else 0,
+        "avg_deny_days":round(sum(nd)/len(nd), 1) if nd else 0,
+    }
+
+YEARS_MAP = {
+    "bush_t1":"2001-2004","bush_t2":"2005-2008","bush_total":"2001-2008",
+    "obama_t1":"2009-2012","obama_t2":"2013-2016","obama_total":"2009-2016",
+    "trump_t1":"2017-2020","biden":"2021-2024",
+    "trump_t2":"2025 (partial)","trump_total":"2017-2020 + 2025",
+}
+LABEL_MAP = {
+    "bush_t1":"Bush T1","bush_t2":"Bush T2","bush_total":"Bush Total",
+    "obama_t1":"Obama T1","obama_t2":"Obama T2","obama_total":"Obama Total",
+    "trump_t1":"Trump T1","biden":"Biden",
+    "trump_t2":"Trump T2","trump_total":"Trump Total",
+}
+TERM_KEYS = ["bush_t1","bush_t2","obama_t1","obama_t2","trump_t1","biden","trump_t2"]
+
+pres_data = {}
+for group_keys, key in [
+    (["bush_t1"],              "bush_t1"),
+    (["bush_t2"],              "bush_t2"),
+    (["bush_t1","bush_t2"],    "bush_total"),
+    (["obama_t1"],             "obama_t1"),
+    (["obama_t2"],             "obama_t2"),
+    (["obama_t1","obama_t2"],  "obama_total"),
+    (["trump_t1"],             "trump_t1"),
+    (["biden"],                "biden"),
+    (["trump_t2"],             "trump_t2"),
+    (["trump_t1","trump_t2"],  "trump_total"),
+]:
+    stats = era_stats_dict(group_keys)
+    # Top incident types for this era
+    inc_counter = defaultdict(int)
+    for r in dec_valid:
+        if ERA_FY_MAP.get(r["fyDeclared"]) in group_keys:
+            inc_counter[r["incidentType"] or "Unknown"] += 1
+    top_inc = sorted([{"type":k,"count":v} for k,v in inc_counter.items()],
+                     key=lambda x: -x["count"])[:6]
+    pres_data[key] = {
+        "label":         LABEL_MAP[key],
+        "years":         YEARS_MAP[key],
+        "declarations":  stats["declarations"],
+        "denials":       stats["denials"],
+        "total":         stats["total_requests"],
+        "denial_rate":   stats["denial_rate"],
+        "avg_days":      stats["avg_days"],
+        "avg_deny_days": stats["avg_deny_days"],
+        "top_incidents": top_inc,
+        # disasters intentionally omitted — filtered from BROWSE client-side
+    }
+
+PRES_ORDER = [
+    ["bush_t1","Bush — Term 1","2001-2004"],
+    ["bush_t2","Bush — Term 2","2005-2008"],
+    ["bush_total","Bush — Total","2001-2008"],
+    ["obama_t1","Obama — Term 1","2009-2012"],
+    ["obama_t2","Obama — Term 2","2013-2016"],
+    ["obama_total","Obama — Total","2009-2016"],
+    ["trump_t1","Trump — Term 1","2017-2020"],
+    ["biden","Biden","2021-2024"],
+    ["trump_t2","Trump — Term 2","2025 (partial)"],
+    ["trump_total","Trump — Total","2017-2020 + 2025"],
+]
+
+# Build locality data (compact: IDs only, client looks up in BROWSE)
+locality_data = defaultdict(list)
+for state, grp in groupby_state(dec_valid):
+    loc_map = defaultdict(lambda: {"rows": [], "ids": set()})
+    for r in grp:
+        area = r.get("designatedArea", "") or ""
+        loc_map[area]["rows"].append(r)
+        loc_map[area]["ids"].add(r["femaDeclarationString"])
+    locs = []
+    for area, v in loc_map.items():
+        rows = v["rows"]
+        top_inc = max(set(r["incidentType"] for r in rows if r["incidentType"]),
+                      key=lambda x: sum(1 for r in rows if r["incidentType"]==x),
+                      default="")
+        locs.append({
+            "n":   area,
+            "c":   len(rows),
+            "d":   len(v["ids"]),
+            "a":   round(sum(r["days_to_approve"] for r in rows)/len(rows), 1),
+            "l":   max(r["declarationDate"] for r in rows),
+            "t":   top_inc,
+            "ids": sorted(v["ids"]),
+        })
+    locality_data[state] = sorted(locs, key=lambda x: -x["c"])
+
+# Write data.js — all window.VAR = ... assignments
+lines = [
+    f'window.SUMMARY          ={json.dumps(summary,         separators=(",",":"))}',
+    f'window.STATE_SUMMARY    ={json.dumps(state_summary,   separators=(",",":"))}',
+    f'window.STATE_YOY        ={json.dumps(state_yoy,       separators=(",",":"))}',
+    f'window.STATE_INC        ={json.dumps(state_inc,       separators=(",",":"))}',
+    f'window.STATE_DISASTERS  ={{}}',
+    f'window.DENIALS          ={json.dumps(den_processed,   separators=(",",":"))}',
+    f'window.BROWSE           ={json.dumps(browse,          separators=(",",":"))}',
+    f'window.STATE_NAMES      ={json.dumps(STATE_NAMES,     separators=(",",":"))}',
+    f'window.LOCALITY_DATA    ={json.dumps(dict(locality_data), separators=(",",":"))}',
+    f'window.PRES_DATA        ={json.dumps(pres_data,       separators=(",",":"))}',
+    f'window.PRES_ORDER       ={json.dumps(PRES_ORDER,      separators=(",",":"))}',
+    f'window.ERA_FY_MAP       ={json.dumps(ERA_FY_MAP,      separators=(",",":"))}',
+    f'window.ERA_TOTAL_KEYS   ={json.dumps(ERA_TOTAL_KEYS,  separators=(",",":"))}',
+    f'window.DATA_DATE        ="{TODAY}"',
+    f'window.PA_NATIONAL      ={json.dumps(pa_national, separators=(",",":"))}',
+    "document.dispatchEvent(new Event('dataReady'));",
+]
+
+data_js_content = "\n".join(lines)
+
+with open("data.js", "w", encoding="utf-8") as f:
+    f.write(data_js_content)
+
+data_kb = len(data_js_content) // 1024
+print(f"  data.js written ({data_kb} KB)")
+
+# Update last-refreshed note in index.html if it exists
+if os.path.exists("index.html"):
+    with open("index.html", encoding="utf-8") as f:
         html = f.read()
-
-    # Replace the embedded data blobs — they are assigned as JS constants
-    import re
-
-    def replace_const(html, const_name, new_json):
-        pattern = rf'(const {re.escape(const_name)}\s*=\s*).*?;'
-        replacement = rf'\g<1>{new_json};'
-        return re.sub(pattern, replacement, html, count=1, flags=re.DOTALL)
-
-    for name, blob in [
-        ("SUMMARY",         summary_json),
-        ("STATE_SUMMARY",   state_summary_json),
-        ("STATE_YOY",       state_yoy_json),
-        ("STATE_INC",       state_inc_json),
-        ("STATE_DISASTERS", state_disasters_json),
-        ("DENIALS",         denials_json),
-        ("BROWSE",          browse_json),
-        ("ERA",             era_json),
-        ("STATE_NAMES",     state_names_json),
-    ]:
-        html = replace_const(html, name, blob)
-
-    # Update the last-refreshed note in the About tab
     html = re.sub(r'Last updated:.*?(?=<)', f'Last updated: {TODAY}', html)
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(html)
+    print("  index.html last-updated stamp refreshed")
 
-else:
-    print("  WARNING: No index.html found — writing data only to data_snapshot.json")
-    with open("data_snapshot.json", "w") as f:
-        json.dump({
-            "summary": summary, "stateSummary": state_summary,
-            "stateYoy": state_yoy, "stateInc": state_inc,
-            "stateDisasters": dict(state_disasters),
-            "denials": den_processed, "browse": browse,
-            "era": era_data,
-        }, f, separators=(",",":"))
-    print("  Wrote data_snapshot.json. Re-run after placing index.html in this directory.")
-    exit(0)
-
-with open("index.html", "w", encoding="utf-8") as f:
-    f.write(html)
-
-size_kb = len(html) // 1024
-print(f"  index.html written ({size_kb} KB)")
 print(f"\nDone. Data as of {TODAY}.")
 print(f"  Declarations: {len(dec_processed):,}")
 print(f"  Denials:      {len(den_processed):,}")
 print(f"  Browse items: {len(browse):,}")
+print(f"  Localities:   {sum(len(v) for v in locality_data.values()):,}")
