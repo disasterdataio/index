@@ -1060,7 +1060,7 @@ tbody td { padding: 8px 13px; font-size: 12px; color: var(--text); white-space: 
         <li>FM declarations are counted in total disaster counts but excluded from PA analysis — they use a separate funding program</li>
         <li>This is a BETA product. Data should be verified against official FEMA sources before use in formal reporting</li>
       </ul>
-      <p style="margin-top:12px;font-size:11px;color:var(--muted)">Last updated: <span id="about-last-updated">—</span></p>
+      <p style="margin-top:12px;font-size:11px;color:var(--muted)">Last updated: <span id="about-last-updated">March 21, 2026</span></p>
     </div>
 
   </div>
@@ -2756,20 +2756,39 @@ async function initHM() {
     }
 
     // ── Slow path: live FEMA API fetch ───────────────────
-    // programArea values: HMGP, FMA, BRIC, PDM, RFC, SRL
-    // We collect HMGP, BRIC, FMA; PDM/RFC/SRL are legacy, excluded
+    // Try proxy first (avoids CORS issues); fall back to direct FEMA API
+    // FEMA's OpenFEMA API sends permissive CORS headers so direct fetch works
     const HM_KEEP = new Set(['HMGP', 'BRIC', 'FMA']);
     const programs = { HMGP: [], BRIC: [], FMA: [] };
 
-    let skip = 0, total = null;
-    const base = `${HM_PROXY}?$top=10000&$select=${encodeURIComponent(HM_FIELDS)}&$inlinecount=allpages`;
-
-    while (true) {
-      const url  = `${base}&$skip=${skip}`;
+    async function hmFetchPage(baseUrl, skip) {
+      const url = `${baseUrl}&$skip=${skip}`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      const json  = await resp.json();
-      // Correct response key is the dataset name
+      return resp.json();
+    }
+
+    // Build base URLs for proxy and direct
+    const paramStr = `$top=10000&$select=${encodeURIComponent(HM_FIELDS)}&$inlinecount=allpages`;
+    const proxyBase  = `${HM_PROXY}?${paramStr}`;
+    const directBase = `${HM_API}?${paramStr}`;
+
+    // Probe proxy with first page; on failure silently switch to direct
+    let useBase = proxyBase;
+    try {
+      const probe = await fetch(`${proxyBase}&$skip=0`);
+      if (!probe.ok) useBase = directBase;
+    } catch(e) {
+      useBase = directBase;
+    }
+
+    statusEl.textContent = useBase === directBase
+      ? 'Loading hazard mitigation data from FEMA API (direct)…'
+      : 'Loading hazard mitigation data via proxy…';
+
+    let skip = 0, total = null;
+    while (true) {
+      const json  = await hmFetchPage(useBase, skip);
       const batch = json.HazardMitigationAssistanceProjects || [];
       if (total === null) total = parseInt(json.metadata?.count || 0);
 
