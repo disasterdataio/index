@@ -54,17 +54,18 @@ def fetch_all(endpoint, extra_filter="", fields=None):
         )
         url = f"{BASE_URL}/{endpoint}{params}"
 
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "UWSWVA-FEMA-Explorer/1.0"})
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     data = json.loads(resp.read())
                 break
             except Exception as e:
-                if attempt == 2:
+                if attempt == 4:
                     raise
-                print(f"    Retry {attempt+1} after error: {e}")
-                time.sleep(3)
+                wait = 10 * (attempt + 1)
+                print(f"    Retry {attempt+1}/4 after error: {e} (waiting {wait}s)")
+                time.sleep(wait)
 
         batch = data.get(endpoint, [])
         records.extend(batch)
@@ -99,8 +100,13 @@ DEN_FIELDS = [
 ]
 
 print("Fetching declarations...")
-raw_dec = fetch_all("DisasterDeclarationsSummaries", fields=DEC_FIELDS)
-print(f"  → {len(raw_dec)} declaration records\n")
+try:
+    raw_dec = fetch_all("DisasterDeclarationsSummaries", fields=DEC_FIELDS)
+    print(f"  → {len(raw_dec)} declaration records\n")
+except Exception as e:
+    print(f"  ERROR: Declarations fetch failed after retries: {e}")
+    print("  Cannot continue without declarations data — exiting.")
+    raise SystemExit(1)
 
 print("Fetching denials...")
 try:
@@ -970,20 +976,19 @@ if os.path.exists("index.html"):
         html = f.read()
     # Update last-updated stamp
     html = re.sub(r'Last updated:.*?(?=<)', f'Last updated: {TODAY}', html)
-    # Inject PA_NATIONAL directly so embedded HTML shows real numbers
+    # Inject PA_NATIONAL and HM_NATIONAL using line-based replacement
+    # (regex approach breaks when JSON contains semicolons in string values)
     pa_json = json.dumps(pa_national, separators=(",",":"))
-    html = re.sub(
-        r'let PA_NATIONAL\s*=\s*\{[^;]*\};',
-        f'let PA_NATIONAL = {pa_json};',
-        html
-    )
-    # Inject HM_NATIONAL directly
     hm_json = json.dumps(hm_national, separators=(",",":"))
-    html = re.sub(
-        r'let HM_NATIONAL\s*=\s*\{[^;]*\};',
-        f'let HM_NATIONAL = {hm_json};',
-        html
-    )
+    lines_out = []
+    for line in html.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith('let PA_NATIONAL') and stripped.endswith(';'):
+            line = f'let PA_NATIONAL = {pa_json};\n'
+        elif stripped.startswith('let HM_NATIONAL') and stripped.endswith(';'):
+            line = f'let HM_NATIONAL = {hm_json};\n'
+        lines_out.append(line)
+    html = ''.join(lines_out)
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(html)
     print("  index.html updated with PA_NATIONAL and last-updated stamp")
